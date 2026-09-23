@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef } from 'react';
 import L from 'leaflet';
-import { BusRoute, LatLng, RouteStop, routes } from './data/routes';
+import type { LatLng, Route, Stop, Vehicle } from './types/transport';
 import { MapContainer, Marker, Polyline, Popup, TileLayer, CircleMarker, ZoomControl, ScaleControl, useMap } from 'react-leaflet';
 import { ArrowUpRight, LocateFixed, X } from 'lucide-react';
 
@@ -27,52 +27,18 @@ function makeBusIcon(color: string, selected: boolean) {
   });
 }
 
-function pointAtDistance(points: LatLng[], cumulative: number[], distance: number): LatLng {
-  let index = 0;
-  while (index < cumulative.length - 2 && cumulative[index + 1] < distance) index++;
-  const segment = cumulative[index + 1] - cumulative[index];
-  const fraction = segment === 0 ? 0 : (distance - cumulative[index]) / segment;
-  return [
-    points[index][0] + (points[index + 1][0] - points[index][0]) * fraction,
-    points[index][1] + (points[index + 1][1] - points[index][1]) * fraction
-  ];
-}
-
-function BusMarker({ line, selected, onSelect, showEta }: { line: BusRoute; selected: boolean; onSelect: () => void; showEta: boolean }) {
-  const lengths = useMemo(() => {
-    const result = [0];
-    for (let i = 1; i < line.coordinates.length; i++) result.push(result[i - 1] + routeDistance(line.coordinates[i - 1], line.coordinates[i]));
-    return result;
-  }, [line]);
-  const total = lengths[lengths.length - 1];
-  const start = useRef(Date.now());
-  const initialDistance = total * (line.id === '12' ? .22 : line.id === '4' ? .41 : .61);
-  const [progress, setProgress] = useState(initialDistance);
-  const [position, setPosition] = useState<LatLng>(() => pointAtDistance(line.coordinates, lengths, initialDistance));
-  const stopProgress = useMemo(() => line.stops.map(stop => { let best = Infinity, at = 0; for (let i = 0; i < line.coordinates.length; i++) { const distance = routeDistance(stop.coordinates, line.coordinates[i]); if (distance < best) { best = distance; at = lengths[i] } } return at }), [lengths, line]);
-  const nextIndex = stopProgress.findIndex(at => at > progress + 35);
-  const nextStop = line.stops[nextIndex < 0 ? 0 : nextIndex];
-  useEffect(() => {
-    const tick = () => {
-      const travelled = ((Date.now() - start.current) / 1000) * 4.5;
-      const currentProgress = (initialDistance + travelled) % total;
-      setProgress(currentProgress);
-      setPosition(pointAtDistance(line.coordinates, lengths, currentProgress));
-    };
-    const timer = window.setInterval(tick, 1200);
-    return () => window.clearInterval(timer);
-  }, [lengths, line, total]);
-  return <Marker position={position} icon={makeBusIcon(line.color, selected)} eventHandlers={{ click: onSelect }} zIndexOffset={800}>
+function BusMarker({ line, vehicle, selected, onSelect, showEta }: { line: Route; vehicle: Vehicle; selected: boolean; onSelect: () => void; showEta: boolean }) {
+  return <Marker position={[vehicle.latitude,vehicle.longitude]} icon={makeBusIcon(line.color, selected)} eventHandlers={{ click: onSelect }} zIndexOffset={800}>
     <Popup className="bus-track-popup">
-      <div className="map-popup"><div className="map-popup-title"><span className="popup-line-dot" style={{ background: line.color }} /><strong>{line.name}</strong>{showEta&&<span className="popup-time">{line.time} min</span>}</div><span>Próxima paragem: {nextStop.name}</span><small>Posição e chegada simuladas</small><button onClick={onSelect}>Ver detalhes da linha <ArrowUpRight size={13} /></button></div>
-    </Popup>
+      <div className="map-popup"><div className="map-popup-title"><span className="popup-line-dot" style={{ background: line.color }} /><strong>{line.name}</strong>{showEta&&<span className="popup-time">{line.estimatedMinutes} min</span>}</div><span>Próxima paragem: {line.nextStop}</span><small>Posição simulada · {new Date(vehicle.timestamp).toLocaleTimeString('pt-PT',{hour:'2-digit',minute:'2-digit'})}</small><button onClick={onSelect}>Ver detalhes da linha <ArrowUpRight size={13} /></button></div>
+  </Popup>
   </Marker>;
 }
 
-function StopMarker({ stop, available, onSelect }: { stop: RouteStop; available: BusRoute[]; onSelect: (line: BusRoute) => void }) {
-  return <CircleMarker center={stop.coordinates} radius={6} pathOptions={{ color: '#fff', weight: 2.5, fillColor: '#172321', fillOpacity: 1 }}>
+function StopMarker({ stop, available, onSelect }: { stop: Stop; available: Route[]; onSelect: (line: Route) => void }) {
+  return <CircleMarker center={[stop.latitude,stop.longitude]} radius={6} pathOptions={{ color: '#fff', weight: 2.5, fillColor: '#172321', fillOpacity: 1 }}>
     <Popup className="bus-track-popup">
-      <div className="map-popup"><div className="section-kicker">PARAGEM</div><strong>{stop.name}</strong><div className="popup-arrivals">{available.map(line => <button key={line.id} onClick={() => onSelect(line)}><span className="popup-line-dot" style={{ background: line.color }} />{line.name}<b>{line.time} min</b></button>)}</div><small>Próximas chegadas simuladas</small></div>
+      <div className="map-popup"><div className="section-kicker">PARAGEM</div><strong>{stop.name}</strong><div className="popup-arrivals">{available.map(line => <button key={line.id} onClick={() => onSelect(line)}><span className="popup-line-dot" style={{ background: line.color }} />{line.name}<b>{line.estimatedMinutes} min</b></button>)}</div><small>Próximas chegadas simuladas</small></div>
     </Popup>
   </CircleMarker>;
 }
@@ -92,19 +58,14 @@ function ResizeMap({ expanded }: { expanded: boolean }) {
 }
 
 type MobilityPreferences = { favoritesOnly: boolean; nearbyStops: boolean; showEta: boolean; showLocation: boolean };
-export default function SantaremMap({ selectedLine, onSelectLine, expanded, onToggleExpanded, favoriteLines = [], mobility = { favoritesOnly: false, nearbyStops: true, showEta: true, showLocation: true } }: { selectedLine: string; onSelectLine: (id: string) => void; expanded: boolean; onToggleExpanded: () => void; favoriteLines?: string[]; mobility?: MobilityPreferences }) {
+export default function SantaremMap({ selectedLine, onSelectLine, expanded, onToggleExpanded, favoriteLines = [], mobility = { favoritesOnly: false, nearbyStops: true, showEta: true, showLocation: true }, routes, stops, vehicles }: { selectedLine: string; onSelectLine: (id: string) => void; expanded: boolean; onToggleExpanded: () => void; favoriteLines?: string[]; mobility?: MobilityPreferences; routes: Route[]; stops: Stop[]; vehicles: Vehicle[] }) {
   const visibleRoutes = mobility.favoritesOnly ? routes.filter(line => favoriteLines.includes(line.id)) : routes;
   const bounds = useMemo(() => {
     const positions = routes.flatMap(line => line.coordinates.map(([lat, lng]) => L.latLng(lat, lng)));
     positions.push(L.latLng(39.219, -8.645)); // Rio Tejo, extent anchor only; route is not drawn here.
     return L.latLngBounds(positions);
-  }, []);
-  const selectRoute = (line: BusRoute) => onSelectLine(line.id);
-  const allStops = useMemo(() => {
-    const map = new Map<string, RouteStop>();
-    for (const line of routes) for (const stop of line.stops) if (!map.has(stop.id)) map.set(stop.id, stop);
-    return [...map.values()];
-  }, []);
+  }, [routes]);
+  const selectRoute = (line: Route) => onSelectLine(line.id);
   return <div className={'map '+(expanded?'map-expanded':'')}>
     <MapContainer center={initialView} zoom={13} scrollWheelZoom zoomControl={false} className="leaflet-map">
       <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maxZoom={19} />
@@ -116,8 +77,8 @@ export default function SantaremMap({ selectedLine, onSelectLine, expanded, onTo
         <Polyline positions={line.coordinates} pathOptions={{ color: '#fff', weight: selectedLine === line.id ? 11 : 8, opacity: .95, lineCap: 'round', lineJoin: 'round' }} eventHandlers={{ click: () => selectRoute(line) }} />
         <Polyline positions={line.coordinates} pathOptions={{ color: line.color, weight: selectedLine === line.id ? 6.5 : 4.5, opacity: selectedLine === line.id ? .96 : .78, lineCap: 'round', lineJoin: 'round' }} eventHandlers={{ click: () => selectRoute(line) }} />
       </Fragment>)}
-      {mobility.nearbyStops && allStops.map(stop => <StopMarker key={stop.id} stop={stop} available={visibleRoutes.filter(line => line.stops.some(item => item.id === stop.id))} onSelect={selectRoute} />)}
-      {visibleRoutes.map(line => <BusMarker key={line.id} line={line} selected={selectedLine === line.id} onSelect={() => selectRoute(line)} showEta={mobility.showEta} />)}
+      {mobility.nearbyStops && stops.map(stop => <StopMarker key={stop.id} stop={stop} available={visibleRoutes.filter(line => line.stops.includes(stop.id))} onSelect={selectRoute} />)}
+      {visibleRoutes.flatMap(line => { const vehicle=vehicles.find(item=>item.routeId===line.id);return vehicle ? [<BusMarker key={vehicle.vehicleId} line={line} vehicle={vehicle} selected={selectedLine===line.id} onSelect={()=>selectRoute(line)} showEta={mobility.showEta} />] : []; })}
       {mobility.showLocation && <><CircleMarker center={DEMO_LOCATION} radius={17} pathOptions={{ color: '#3987f5', weight: 0, fillColor: '#3987f5', fillOpacity: .16 }} />
       <CircleMarker center={DEMO_LOCATION} radius={6} pathOptions={{ color: '#fff', weight: 2.5, fillColor: '#3987f5', fillOpacity: 1 }}>
         <Popup><div className="map-popup"><div className="section-kicker">LOCALIZAÇÃO</div><strong>Centro de Santarém</strong><small>Posição fixa de demonstração; não usa GPS.</small></div></Popup>

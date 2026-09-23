@@ -1,6 +1,8 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { PreferencesProvider } from './preferences/PreferencesContext';
+import { TransportProvider } from './services/TransportContext';
+import { IncidentProvider } from './services/IncidentContext';
 import 'leaflet/dist/leaflet.css';
 import './style.css';
 import './map.css';
@@ -35,4 +37,4 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   });
 }
 
-createRoot(document.getElementById('root')!).render(<PreferencesProvider><App /></PreferencesProvider>);
+createRoot(document.getElementById('root')!).render(<IncidentProvider><TransportProvider><PreferencesProvider><App /></PreferencesProvider></TransportProvider></IncidentProvider>);
